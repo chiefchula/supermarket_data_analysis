@@ -1,0 +1,468 @@
+---
+title: "Supermarket Data Analysis"
+author: "Thomas Chula"
+date: "2025-12-06"
+output: 
+  
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: show
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Libraries
+pacman::p_load(
+  tidyverse, lubridate, ggplot2, scales, knitr, kableExtra, plotly, DT, 
+  gridExtra, corrplot, ggthemes, tidylog, janitor
+)
+
+# global options
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width=10, 
+  fig.height=6)
+options(scipen = 999) # Disable scientific notations
+
+
+```
+
+```{r}
+rm(list = ls())
+
+supermarket <- read_csv('C:/Users/Chula/OneDrive/Documents/GitHub/supermarket/Supermarket-Sales-Data-Analysis/supermarket_sales - Sheet1.csv')
+
+supermarket_clean <- supermarket %>% 
+  mutate(across(Date, mdy)) %>% 
+  mutate(across(c('Branch', 'City', 'Customer type', 'Gender', 'Product line','Payment'), ~as.factor(.))) %>% 
+  mutate(
+    day_of_week = wday(Date, label = T),
+    month = month(Date, label = T),
+    hour = hour(Time),
+    .after = Date) %>% 
+  clean_names()
+
+```
+
+# Executive Summary {.unumbered}
+
+```{r}
+# Key Metrics
+total_revenue <- sum(supermarket_clean$total)
+avg_transaction <- mean(supermarket_clean$total)
+total_transaction <- nrow(supermarket_clean)
+member_percentage <- mean(supermarket_clean$customer_type == 'Member') * 100
+avg_rating <- mean(supermarket_clean$rating)
+```
+This report analyzes `r total_transaction` transactions generating $`r format(round(total_revenue, 0), big.mark=",")` in revenue over the observation period.
+
+**Key Highlights:**
+
+- Average transaction value: $`r round(avg_transaction,2)`
+- `r round(member_percentage,1)` % of customers are members.
+- Overall customer satisfaction rating: `r round(avg_rating, 1)`/10.
+- Data spans `r length(unique(supermarket_clean$city))` cities and `r length(unique(supermarket_clean$product_line))` product categories
+
+
+# Customer Demographics
+## Customer Type Distribution
+
+```{r}
+customer_summary <- supermarket_clean %>% 
+  group_by(customer_type) %>% 
+  summarise(
+    Count = n(),
+    Percentage = round(n() / nrow(supermarket_clean)*100),
+    Avg_Transaction = round(mean(total), 2),
+    Total_Revenue = round(sum(total),2),
+    Avg_Rating = round(mean(rating), 1)
+  )
+
+customer_summary %>% 
+  kable(caption = "Customer Type Analysis") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+# Visualization
+p_customer_type <- customer_summary %>% 
+  ggplot(aes(x = customer_type, y = Total_Revenue, fill = customer_type)) +
+  geom_bar(stat = 'identity', width = 0.6) +
+  geom_text(aes(label = scales::dollar(Total_Revenue)), vjust = -0.5) +
+  labs(title = "Revenue by customer Type",
+       subtitle = "Members vs Normal Customers",
+       x = "", y = "Total Revenue") +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p_customer_type
+```
+**Insight:** While Members represent `r customer_summary$Percentage[customer_summary$customer_type == "Member"]`% of customers, their average transaction value is $`r customer_summary$Avg_Transaction[customer_summary$customer_type == 'Member']` compared to $`r customer_summary$Avg_Transaction[customer_summary$customer_type == 'Normal']` for normal customers.
+
+## Gender Distribution
+```{r}
+gender_analysis <- supermarket_clean %>% 
+  group_by(gender) %>% 
+  summarise(
+    Count = n(),
+    Percentage = round(n() / nrow(supermarket_clean)*100, 1),
+    Avg_Spend = round(mean(total), 2),
+    Avg_Rating = round(mean(rating), 1),
+    .groups = 'drop'
+  ) %>% 
+  rename(Gender = gender)
+
+gender_analysis %>% 
+  kable(caption = "Gender-Base Analysis") %>% 
+  kable_styling(bootstrap_options = c("Striped", "hover"), full_width = FALSE)
+
+# Visualization
+p_gender_product <- supermarket_clean %>% 
+  group_by(gender, product_line) %>% 
+  summarise(Total_Revenue = sum(total), .groups = 'drop') %>% 
+  ggplot(aes(x = reorder(product_line, Total_Revenue), y = Total_Revenue, fill = gender)) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  coord_flip() +
+  labs(
+    title = "Revenue by Product Line and Gender",
+    x = "", y = 'Total Revenue') +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_fill_brewer(palette = "Set1") +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+
+p_gender_product
+```
+
+# Product Performance
+## Top Performing Product Lines
+```{r}
+product_analysis <- supermarket_clean %>% 
+  group_by(product_line) %>% 
+  summarise(
+    Transactions = n(),
+    Percentage = round(n()/nrow(supermarket_clean)*100,1),
+    Avg_Unit_Price = round(mean(unit_price), 2),
+    Avg_Quantity = round(mean(quantity), 1),
+    Total_Revenue = round(sum(total), 0),
+    Avg_Rating = round(mean(rating), 1),
+    .groups = 'drop'
+  ) %>% 
+  arrange(desc(Total_Revenue))
+
+product_analysis %>% 
+  kable(caption = "Product Line Performance") %>% 
+  kable_styling(bootstrap_options = c('Striped','hover'))
+
+# Visualization - Top products
+p_top_product <- product_analysis %>% 
+  head(6) %>% 
+  ggplot(aes(x = reorder(product_line, Total_Revenue), y = Total_Revenue)) +
+  geom_bar(stat = 'identity', fill = 'steelblue', alpha = 0.8) +
+  coord_flip() +
+  geom_text(aes(label = scales::dollar(Total_Revenue)), hjust = 1.1, color = 'white', size = 3.5) +
+  labs(
+    title = 'Top 6 Product Lines by Revenue',
+    x = '', y = 'Total Revenue') + 
+  scale_y_continuous(labels = scales::dollar) +
+  theme_minimal()
+
+p_top_product
+```
+
+## Product Rating Analysis
+```{r}
+p_rating_revenue <- product_analysis %>% 
+  ggplot(aes(x = Avg_Rating, y = Total_Revenue, size = Transactions, color = product_line)) +
+  geom_point(alpha = 0.7) +
+  geom_text(aes(label = product_line), vjust = -0.8, size = 3, check_overlap = TRUE) +
+  labs(
+    title = "Product Ratings vs Revenue",
+    subtitle = "Size represents number of transactions",
+    x = "Average Rating(1-10)", y = "Total Revenue") +
+  scale_y_continuous(labels = scales::dollar) +
+  theme_minimal() +
+  theme(legend.position = 'none')
+
+p_rating_revenue
+```
+**Key Insights:** `r product_analysis$product_line[1]` generates the highest revenue ($ `r format(product_analysis$Total_Revenue[1], big.mark = ",")`) but has a rating of only `r product_analysis$Avg_Rating[1]`.
+Consider investigating quality issues.
+
+# Temporal Patterns
+## Daily Shopping Patterns
+```{r}
+# Create hour-day analysis
+hourly_analysis <- supermarket_clean %>% 
+  group_by(day_of_week, hour) %>% 
+  summarise(
+    Transactions = n(),
+    Avg_Revenue = mean(total),
+    .groups = 'drop'
+  )
+
+# Heatmap
+p_heatmap <- hourly_analysis %>% 
+  ggplot(aes(x = factor(hour), y = factor(day_of_week, levels = c('Mon','Tue','Wed','Thu','Fri','Sat','Sun')), fill = Transactions)) + 
+  geom_tile(color = 'white') +
+  scale_fill_gradient(low = 'white', high = 'darkgreen') +
+  labs(
+    title = 'Shopping Pattern Heatmap',
+    subtitle = 'Transactions by Day and Hour',
+    x = 'Hour of Day', y = 'Day of Week'
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0))
+
+p_heatmap
+```
+
+
+
+## Peak Hours Analysis
+```{r}
+peak_hours <- supermarket_clean %>% 
+  group_by(hour) %>% 
+  summarise(
+    Transactions = n(),
+    Total_Revenue = sum(total),
+    Avg_Transaction = mean(total),
+    .groups = 'drop'
+  ) %>% 
+  arrange(desc(Transactions))
+
+peak_hours %>% 
+  head(5) %>% 
+  kable(caption = 'Top 5 Peak Shopping Hours') %>% 
+  kable_styling(bootstrap_options = c('striped', 'hover'), full_width = F)
+
+# Visualization
+p_peak_hours <- peak_hours %>% 
+  ggplot(aes(x = hour, y = Transactions)) +
+  geom_line(group = 1, color = 'steelblue', size = 1.5) +
+  geom_point(color = 'darkred', size = 3) +
+  labs(
+    title = 'Transactions Volume Throughout the Day',
+    x = 'Hour of Day', y = 'Number of Transactions') +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p_peak_hours
+```
+**Finding:** The busiest hour is `r peak_hours$hour[1]`:00 with `r peak_hours$Transactions[1]` transactions. Consider staffing adjustments during peak periods.
+
+# Financial Analysis
+## Payment Method Preferences
+
+```{r}
+payment_analysis <- supermarket_clean %>% 
+  group_by(payment) %>% 
+  summarise(
+    Count = n(),
+    Percentage = round(n()/nrow(supermarket_clean)*100, 1),
+    Avg_Amount = round(mean(total), 2),
+    Total_Amount = round(sum(total), 0),
+    .groups = 'drop'
+  ) %>% 
+  arrange(desc(Percentage))
+
+payment_analysis %>% 
+  kable(caption = 'Payment Method Analysis') %>% 
+  kable_styling(bootstrap_options = c('striped','hover'), full_width = F)
+
+# Visualization
+p_payment <- payment_analysis %>% 
+  ggplot(aes(x = reorder(payment, Percentage), y = Percentage, fill = payment)) +
+  geom_bar(stat = 'identity', width = 0.6) +
+  geom_text(aes(label = paste0(Percentage, '%')), vjust = -0.5) +
+  labs(
+    title = 'Payment Method Distribution',
+    x = '', y = 'Percentage of Transactions (%)') +
+  scale_fill_brewer(palette = 'set3') +
+  theme_minimal() +
+  theme(legend.position = 'none')
+
+p_payment
+```
+
+# Branch Performance Comparison
+
+```{r}
+branch_analysis <- supermarket_clean %>% 
+  group_by(branch, city) %>% 
+  summarise(
+    Transactions = n(),
+    Percentage = round(n() / nrow(supermarket_clean)*100, 1),
+    Total_Revenue = round(sum(total), 0),
+    Avg_Transaction = round(mean(total), 2),
+    Avg_Rating = round(mean(rating), 1),
+    .groups = 'drop'
+  ) %>% 
+  arrange(desc(Total_Revenue))
+
+branch_analysis %>% 
+  kable(caption = 'Branch Performance Comparison') %>% 
+  kable_styling(bootstrap_options = c('striped','hover'))
+
+# Visualization
+p_branch <- branch_analysis %>% 
+  ggplot(aes(x = reorder(paste(branch, '(',city,')'), Total_Revenue), y = Total_Revenue, fill = city)) +
+  geom_bar(stat = 'identity', width = 0.6) +
+  geom_text(aes(label = scales::dollar(Total_Revenue)), hjust = 1.1, color = 'white') +
+  coord_flip() +
+  labs(
+    title = 'Branch Revenue Performance',
+    x = '',y = 'Total Revenue'
+  )+
+  scale_y_continuous(labels = scales::dollar) +
+  scale_fill_brewer(palette = 'Set2') +
+  theme_minimal()
+
+p_branch
+```
+**Insights**: Branch `r branch_analysis$branch[1]` in `r branch_analysis$city[1]` is the top performer with $`r format(branch_analysis$Total_Revenue[1], big.mark=',')` in revenue.
+
+
+# Customer Value Segmentation
+
+```{r}
+# create customer segments
+customer_segments <- supermarket_clean %>% 
+  group_by(invoice_id) %>% 
+  summarise(
+    Total_Spent = sum(total),
+    Avg_Spent = mean(total),
+    Visits = n(),
+    .group = 'drop'
+  ) %>% 
+  mutate(
+    Segment = case_when(
+      Total_Spent > quantile(Total_Spent, 0.9) ~ 'VIP',
+      Total_Spent > quantile(Total_Spent, 0.7) ~ 'High Value',
+      Total_Spent > quantile(Total_Spent, 0.4) ~ 'Medium Value',
+      TRUE ~ 'Low Value'
+    )
+  )
+  
+segment_summary <- customer_segments %>% 
+  group_by(Segment) %>% 
+    summarise(
+      Customer = n(),
+      Percentage = round(n()/nrow(customer_segments)*100, 1),
+      Avg_Total_Spent = round(mean(Total_Spent), 2),
+      Avg_Visits = round(mean(Visits), 1),
+      Revenue_Share = round(sum(Total_Spent)/sum(customer_segments$Total_Spent)*100, 1
+),
+.groups = 'drop')
+
+segment_summary %>% 
+  kable(caption = 'Customer Value Segmentation') %>% 
+  kable_styling(bootstrap_options = c('striped','hover'))
+
+# Visualization Customer segmentation scatter
+p_segments <- customer_segments %>% 
+  ggplot(aes(x = Visits, y = Total_Spent, color = Segment, size = Total_Spent)) +
+  geom_point(alpha = 0.6) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(
+    title = 'Customer Value Segmentation',
+    subtitle = 'Total Spend vs Number of Visits',
+    x = 'Number of Visits', y = 'Total Spent'
+  ) +
+  scale_color_brewer(palette = 'Set1') +
+  theme_minimal() +
+  theme(legend.position = 'bottom')
+
+p_segments
+```
+**Critical Finding:** The top `r segment_summary$Percentage[segment_summary$Segment == 'VIP']`% of customers (VIP segment) account for `r segment_summary$Revenue_Share[segment_summary$Segment == 'VIP']`% of total revenue!
+
+# Correlation Analysis
+```{r}
+# Select numerical variables for correlation
+numeric_var <- supermarket_clean %>% 
+  select(unit_price, quantity, tax_5_percent, total, cogs, gross_income, rating)
+
+cor_matrix <- cor(numeric_var, use = 'complete.obs')
+
+corrplot(cor_matrix, method = 'color', type = 'upper',
+         tl.col = 'black', tl.srt = 45,
+         addCoef.col = 'black',
+         title = 'Correlation Matrix of Numerical Variables',
+         mar = c(0,0,2,0))
+```
+**Key Correlations:**
+
+- Total and cogs: Near-perfect correlation (expected, as cogs is cost of goods sold).
+- Quantity and Total: Strong positive correlation.
+- Rating shows weak correlations with financial metrics, suggesting rating is independent of transaction value.
+
+
+# Interactive Data Explorer
+```{r}
+# Interactive table (comment out for PDF output)
+
+DT::datatable(
+  supermarket_clean %>% 
+    select(invoice_id, branch, city, customer_type, product_line, total, date, rating) %>% 
+    head(100),
+  options = list(pageLength = 10, scrollX = TRUE),
+  caption = 'Sample Transaction Data (First 100 rows)'
+)
+```
+
+
+# Recommendations & Action
+Based on out analysis, here are actionable recommendations:
+
+## Immediate Action (Next 30 days)
+
+1. **Target VIP Customers:** Implement a loyalty program enhancement for top `r segment_summary$Percentage[segment_summary$Segment == 'VIP']`% of customers.
+2. **Peak Hour Optimization:** Investigate quality concerns in `r product_analysis$product_line[1]` (high revenue, lower rating)
+
+## Strategic Initiatives (Next Quarter)
+1. **Member Conversion:** Develop strategy to convert normal customers to members (currently conversion opportunity: `r 100 - member_percentage`% of base)
+2. **Branch Performance** Share best practices from Branch `r branch_analysis$branch[1]` to lower-performing branches.
+3. **Payment Infrastructure:** Consider promoting `r payment_analysis$payment[1]` payment method further.
+
+## Long-term opportunities
+1. **Personalization:** Use customer segmentation for targeted marketing.
+2. **Inventory Optimization:** Align stock levels with product performance data.
+3. **Pricing Strategy:** Test price optimization for underperforming product lines.
+
+# Appendix: Data Dictionary {.unumbered}
+```{r}
+data_dict <- data.frame(
+  Variables = c('Invoice ID', 'Branch','City','Customer type','Gender','Product line','Unit price','Quantity','Tax .5','Total','Date','Day of Week','Time','Payment','COGS','Gross Margin Percenage','Gross Income','Rating'),
+  Description = c('Unique invoice ID','Branch identifier (A, B, C)', 'City location','Member or Normal customer','Gender of customer','Product category','Price per unit', 'Quantity purchased','5% tax on transaction','Total amount including tax','Date of transaction','Day of week','Time of transaction','Payment method used','Cost of goods sold','Gross margin percentage','Gross income','Customer rating(1-10)')
+)
+
+kable(data_dict, caption = 'Data Dictionary') %>% 
+  kable_styling(bootstrap_options = c('striped','hover'))
+```
+
+Report generated on `r Sys.Date()` using R `r R.version$major`.`r R.version$minor`
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
